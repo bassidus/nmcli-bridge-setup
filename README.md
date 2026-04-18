@@ -10,7 +10,6 @@ A small Bash helper script for setting up a NetworkManager bridge on CachyOS sys
 - Removes all existing connections on the selected interface before creating the bridge, to avoid IP conflicts.
 - Creates a bridge interface named `br0` with STP disabled.
 - Adds the selected interface as a bridge slave.
-- Inherits the physical interface's MAC address so existing DHCP reservations on the router are preserved.
 - Configures automatic IPv4/IPv6 addressing and enables autoconnect so the bridge persists after reboot.
 - Brings up the bridge and verifies an IP address was assigned.
 - Rolls back automatically if setup fails partway through, restoring network connectivity.

@@ -138,26 +138,22 @@ done < <(nmcli -g NAME,DEVICE con show | awk -F: -v dev="$PHYS_IF" '$2 == dev {p
 nmcli con add type bridge ifname "$BRIDGE" con-name "$BRIDGE" stp no 2>/dev/null || true
 nmcli con add type bridge-slave ifname "$PHYS_IF" master "$BRIDGE" con-name "bridge-slave-$PHYS_IF" 2>/dev/null || true
 
-# Inherit the physical interface's MAC so DHCP reservations on the router are preserved.
-PHYS_MAC=$(cat /sys/class/net/"$PHYS_IF"/address)
-
-# Configure DHCP, autoconnect, and MAC on the bridge.
+# Configure DHCP and autoconnect on the bridge.
 nmcli con mod "$BRIDGE" \
     ipv4.method auto ipv6.method auto \
     connection.autoconnect yes \
-    connection.autoconnect-slaves yes \
-    bridge.mac-address "$PHYS_MAC"
+    connection.autoconnect-slaves yes
 
-# Bring up bridge and slave; NM is idempotent so safe to call even if already active.
+# Bring up slave first — this creates the br0 kernel device.
+# Then bring up the bridge master to configure IP on the now-existing device.
 echo "Activating bridge $BRIDGE..."
+nmcli con up "bridge-slave-$PHYS_IF"
 nmcli con up "$BRIDGE"
-nmcli con up "bridge-slave-$PHYS_IF" 2>/dev/null || true
 
 wait_for_ip "$BRIDGE"
 trap - ERR
 
-BRIDGE_MAC=$(cat /sys/class/net/"$BRIDGE"/address)
-echo "Bridge $BRIDGE is active (MAC: $BRIDGE_MAC) and will persist after reboot."
+echo "Bridge $BRIDGE is active and will persist after reboot."
 echo "Verification:"
 nmcli device status
 ip addr show "$BRIDGE"
