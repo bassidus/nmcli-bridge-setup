@@ -1,4 +1,4 @@
-# bridge_setup
+# nmcli-bridge-setup
 
 A small Bash helper script for setting up a NetworkManager bridge on CachyOS systems using `nmcli`.
 
@@ -28,13 +28,13 @@ A small Bash helper script for setting up a NetworkManager bridge on CachyOS sys
 1. Make the script executable (if needed):
 
 ```bash
-chmod +x bridge_setup.sh
+chmod +x nmcli-bridge-setup.sh
 ```
 
 2. Run the script as root:
 
 ```bash
-sudo ./bridge_setup.sh
+sudo ./nmcli-bridge-setup.sh
 ```
 
 3. Follow the prompt and select the physical Ethernet interface (for example `enp4s0`).
@@ -46,7 +46,7 @@ sudo ./bridge_setup.sh
 To tear down the bridge and restore a plain Ethernet connection on the physical interface:
 
 ```bash
-sudo ./bridge_setup.sh --remove
+sudo ./nmcli-bridge-setup.sh --remove
 ```
 
 > **Note:** If a NetworkManager profile already exists for the physical interface, it will be reused. A new profile is only created if none is found.
