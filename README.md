@@ -8,7 +8,7 @@ The script is a toggle:
 
 **When no bridge exists (toggle on):**
 
-- Ensures `NetworkManager` is running.
+- Checks that `NetworkManager` is running.
 - Lists available Ethernet interfaces with their connection state and prompts for a selection (Wi-Fi is excluded — bridging does not work in 802.11 infrastructure mode).
 - Remembers which connection is currently active on the interface, so it can be restored later. Your existing profile is kept untouched — only deactivated while the bridge is up.
 - Creates a bridge named `br0` with STP disabled and adds the selected interface as a bridge slave.
@@ -26,7 +26,8 @@ The script is a toggle:
 - `bash`
 - `nmcli` (NetworkManager CLI)
 - `systemctl`
-- Root privileges
+
+Root is normally **not** required: `nmcli` permissions go through polkit, and on most desktop systems a locally logged-in user in an active session may manage system connections without `sudo`. If polkit denies the operation on your system, run the script with `sudo` instead.
 
 ## Usage
 
@@ -36,10 +37,10 @@ The script is a toggle:
 chmod +x nmcli-bridge-setup.sh
 ```
 
-2. Before starting your VM, run the script as root to bring the bridge up:
+2. Before starting your VM, run the script to bring the bridge up:
 
 ```bash
-sudo ./nmcli-bridge-setup.sh
+./nmcli-bridge-setup.sh
 ```
 
 3. Follow the prompt and select the physical Ethernet interface (for example `enp4s0`).
@@ -49,10 +50,10 @@ sudo ./nmcli-bridge-setup.sh
 5. When you're done with the VM, run the same command again to remove the bridge and restore your previous connection:
 
 ```bash
-sudo ./nmcli-bridge-setup.sh
+./nmcli-bridge-setup.sh
 ```
 
-> **Note:** The previously active connection name is stored in `/run/nmcli-bridge-setup.state`. Since `/run` is cleared on reboot and the bridge never autoconnects, a reboot with the bridge still up simply brings the system back on the normal connection — though the leftover `br0` profiles will be deleted the next time the script runs.
+> **Note:** The previously active connection name is stored in `$XDG_RUNTIME_DIR/nmcli-bridge-setup.state` (falling back to `/tmp`). Since that directory is cleared on reboot and the bridge never autoconnects, a reboot with the bridge still up simply brings the system back on the normal connection — though the leftover `br0` profiles will be deleted the next time the script runs.
 
 ## Disclaimer
 

@@ -11,11 +11,11 @@ set -euo pipefail
 
 BRIDGE="br0"
 PHYS_IF=""
-STATE_FILE="/run/nmcli-bridge-setup.state"
+STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/nmcli-bridge-setup.state"
 
 usage() {
     cat <<EOF
-Usage: sudo $0 [--help]
+Usage: $0 [--help]
 
 Toggles the bridge $BRIDGE:
   - If $BRIDGE does not exist: creates it, enslaves a physical Ethernet
@@ -32,11 +32,6 @@ EOF
 if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
     usage
     exit 0
-fi
-
-if [[ $EUID -ne 0 ]]; then
-    echo "This script needs to be run as root: sudo $0"
-    exit 1
 fi
 
 if ! command -v nmcli &>/dev/null; then
@@ -126,10 +121,12 @@ fi
 
 # --- Otherwise: bring the bridge up. ---
 
-# Ensure NetworkManager is running before any nmcli calls.
+# nmcli permissions are handled by polkit, so root is normally not needed for
+# a locally logged-in user — but NetworkManager must already be running.
 if ! systemctl is-active --quiet NetworkManager; then
-    echo "Starting NetworkManager..."
-    systemctl start NetworkManager
+    echo "NetworkManager is not running. Start it and try again:"
+    echo "  sudo systemctl start NetworkManager"
+    exit 1
 fi
 
 select_interface
