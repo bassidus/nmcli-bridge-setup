@@ -1,19 +1,25 @@
 # nmcli-bridge-setup
 
-A small Bash helper script for setting up a NetworkManager bridge on CachyOS systems using `nmcli`.
+A small Bash helper script that toggles a NetworkManager bridge (`br0`) on and off using `nmcli` — run it once before starting a VM to bring the bridge up, and again when you're done to restore normal networking.
 
 ## What it does
 
+The script is a toggle:
+
+**When no bridge exists (toggle on):**
+
 - Ensures `NetworkManager` is running.
-- Lists available Ethernet interfaces with their connection state and prompts for a selection.
-- Blocks Wi-Fi interfaces — bridging does not work in 802.11 infrastructure mode.
-- Removes all existing connections on the selected interface before creating the bridge, to avoid IP conflicts.
-- Creates a bridge interface named `br0` with STP disabled.
-- Adds the selected interface as a bridge slave.
-- Configures automatic IPv4/IPv6 addressing and enables autoconnect so the bridge persists after reboot.
+- Lists available Ethernet interfaces with their connection state and prompts for a selection (Wi-Fi is excluded — bridging does not work in 802.11 infrastructure mode).
+- Remembers which connection is currently active on the interface, so it can be restored later. Your existing profile is kept untouched — only deactivated while the bridge is up.
+- Creates a bridge named `br0` with STP disabled and adds the selected interface as a bridge slave.
+- Configures automatic IPv4/IPv6 addressing with autoconnect **disabled** — the bridge never takes over the interface at boot, so a reboot always comes back on your normal connection.
 - Brings up the bridge and verifies an IP address was assigned.
 - Rolls back automatically if setup fails partway through, restoring network connectivity.
-- Offers a `--remove` flag to tear down the bridge and restore a plain Ethernet connection.
+
+**When the bridge already exists (toggle off):**
+
+- Deletes the bridge and slave profiles.
+- Reactivates the connection that was active before the bridge was brought up.
 
 ## Requirements
 
@@ -30,7 +36,7 @@ A small Bash helper script for setting up a NetworkManager bridge on CachyOS sys
 chmod +x nmcli-bridge-setup.sh
 ```
 
-2. Run the script as root:
+2. Before starting your VM, run the script as root to bring the bridge up:
 
 ```bash
 sudo ./nmcli-bridge-setup.sh
@@ -38,17 +44,15 @@ sudo ./nmcli-bridge-setup.sh
 
 3. Follow the prompt and select the physical Ethernet interface (for example `enp4s0`).
 
-4. After setup, configure your VM in `virt-manager` to use **Bridge br0**.
+4. Configure your VM in `virt-manager` to use **Bridge br0**.
 
-## Remove the bridge
-
-To tear down the bridge and restore a plain Ethernet connection on the physical interface:
+5. When you're done with the VM, run the same command again to remove the bridge and restore your previous connection:
 
 ```bash
-sudo ./nmcli-bridge-setup.sh --remove
+sudo ./nmcli-bridge-setup.sh
 ```
 
-> **Note:** If a NetworkManager profile already exists for the physical interface, it will be reused. A new profile is only created if none is found.
+> **Note:** The previously active connection name is stored in `/run/nmcli-bridge-setup.state`. Since `/run` is cleared on reboot and the bridge never autoconnects, a reboot with the bridge still up simply brings the system back on the normal connection — though the leftover `br0` profiles will be deleted the next time the script runs.
 
 ## Disclaimer
 

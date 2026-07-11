@@ -1,22 +1,29 @@
 #!/bin/bash
 
-# Creates a NetworkManager bridge (br0) and attaches a physical interface as a slave,
-# giving VMs direct LAN access via virt-manager.
+# Toggles a NetworkManager bridge (br0) on a physical interface, giving VMs
+# direct LAN access via virt-manager.
+#
+# Run once before starting a VM to bring the bridge up, run again to tear it
+# down and restore the previous connection. The bridge never autoconnects,
+# so a reboot always comes back on the normal ethernet connection.
 
 set -euo pipefail
 
 BRIDGE="br0"
 PHYS_IF=""
+STATE_FILE="/run/nmcli-bridge-setup.state"
 
 usage() {
     cat <<EOF
-Usage: sudo $0 [--remove] [--help]
+Usage: sudo $0 [--help]
 
-  --remove   Tear down the bridge and restore the physical interface.
-  --help     Show this help message.
+Toggles the bridge $BRIDGE:
+  - If $BRIDGE does not exist: creates it, enslaves a physical Ethernet
+    interface and activates it. Your existing connection profile is kept
+    (only deactivated) and is restored on the next run.
+  - If $BRIDGE exists: tears it down and reactivates the previous connection.
 
-This script creates a NetworkManager bridge interface named $BRIDGE and
-adds a physical Ethernet interface as a bridge slave.
+Run it before starting a VM, and again when you are done.
 
 Note: Wi-Fi interfaces cannot be bridged in infrastructure mode (kernel limitation).
 EOF
@@ -37,14 +44,14 @@ if ! command -v nmcli &>/dev/null; then
     exit 1
 fi
 
-# Prompt the user to pick from NM-managed ethernet/wifi interfaces.
+# Prompt the user to pick from NM-managed ethernet interfaces.
 # Sets the global PHYS_IF. Exits if no interfaces found or selection is invalid.
 select_interface() {
-    local prompt="$1"
-    mapfile -t IFACES < <(nmcli -g DEVICE,TYPE device status | awk -F: '$2 == "ethernet" || $2 == "wifi" {print $1}')
+    mapfile -t IFACES < <(nmcli -g DEVICE,TYPE device status | awk -F: '$2 == "ethernet" {print $1}')
 
     if [[ ${#IFACES[@]} -eq 0 ]]; then
-        echo "No ethernet or Wi-Fi interfaces found."
+        echo "No Ethernet interfaces found."
+        echo "(Wi-Fi cannot be bridged — use NAT networking in virt-manager instead.)"
         exit 1
     fi
 
@@ -53,24 +60,13 @@ select_interface() {
         read -rp "Interface: $PHYS_IF — confirm? [Y/n]: " CONFIRM
         if [[ ${CONFIRM:-Y} =~ ^[Nn] ]]; then echo "Aborted."; exit 1; fi
     else
-        echo "Available interfaces:"
-        nmcli -g DEVICE,TYPE,STATE device status | awk -F: '$2 == "ethernet" || $2 == "wifi" {printf "  %-15s %s\n", $1, $3}'
-        read -rp "$prompt" PHYS_IF
+        echo "Available Ethernet interfaces:"
+        nmcli -g DEVICE,TYPE,STATE device status | awk -F: '$2 == "ethernet" {printf "  %-15s %s\n", $1, $3}'
+        read -rp "Enter physical interface (e.g. enp4s0): " PHYS_IF
         if ! printf '%s\n' "${IFACES[@]}" | grep -qx "$PHYS_IF"; then
             echo "Invalid interface: $PHYS_IF"
             exit 1
         fi
-    fi
-}
-
-# Block Wi-Fi interfaces — bridging does not work in 802.11 infrastructure mode.
-warn_if_wifi() {
-    local iface_type
-    iface_type=$(nmcli -g DEVICE,TYPE device status | awk -F: -v dev="$PHYS_IF" '$1 == dev {print $2}')
-    if [[ "$iface_type" == "wifi" ]]; then
-        echo "Error: $PHYS_IF is a Wi-Fi interface. Bridging does not work in infrastructure mode."
-        echo "Use an Ethernet interface, or use NAT networking in virt-manager instead."
-        exit 1
     fi
 }
 
@@ -87,62 +83,78 @@ wait_for_ip() {
     echo "Warning: No IPv4 on $iface yet"
 }
 
-# Tear down the bridge and restore a plain ethernet connection on the physical interface.
-# Used both for --remove (user-initiated) and as an ERR trap (automatic rollback on failure).
-# If PHYS_IF is already set (rollback case), skips the interface prompt.
-restore_ethernet() {
-    [[ -z "$PHYS_IF" ]] && select_interface "Enter physical interface to restore (e.g. enp4s0): "
+# Delete the bridge and slave profiles, then reactivate whatever connection was
+# active before the bridge was brought up. Used both for the normal "toggle off"
+# path and as an ERR trap (automatic rollback if setup fails halfway).
+bridge_down() {
+    # Derive the enslaved interface from the slave profile if PHYS_IF is unset.
+    if [[ -z "$PHYS_IF" ]]; then
+        PHYS_IF=$(nmcli -g NAME con show | sed -n "s/^bridge-slave-//p" | head -n1)
+    fi
 
-    echo "Bringing down bridge..."
+    echo "Bringing down bridge $BRIDGE..."
     nmcli con down "$BRIDGE" 2>/dev/null || true
     nmcli con delete "$BRIDGE" 2>/dev/null || true
 
-    echo "Removing slave connection..."
-    nmcli con down "bridge-slave-$PHYS_IF" 2>/dev/null || true
-    nmcli con delete "bridge-slave-$PHYS_IF" 2>/dev/null || true
+    if [[ -n "$PHYS_IF" ]]; then
+        nmcli con down "bridge-slave-$PHYS_IF" 2>/dev/null || true
+        nmcli con delete "bridge-slave-$PHYS_IF" 2>/dev/null || true
+    fi
 
-    echo "Restoring ethernet connection on $PHYS_IF..."
-    # Only create a new connection if none exists — avoids clobbering an existing profile.
-    nmcli con add type ethernet ifname "$PHYS_IF" con-name "$PHYS_IF" \
-        ipv4.method auto ipv6.method auto \
-        connection.autoconnect yes 2>/dev/null || true
-    nmcli con up "$PHYS_IF" 2>/dev/null || true
+    # Reactivate the connection that was active before the bridge, if we know it.
+    local old_con=""
+    [[ -f "$STATE_FILE" ]] && old_con=$(<"$STATE_FILE")
+    rm -f "$STATE_FILE"
 
-    wait_for_ip "$PHYS_IF"
+    if [[ -n "$old_con" ]] && nmcli con show "$old_con" &>/dev/null; then
+        echo "Reactivating connection '$old_con'..."
+        nmcli con up "$old_con"
+    elif [[ -n "$PHYS_IF" ]]; then
+        echo "Reconnecting $PHYS_IF..."
+        nmcli device connect "$PHYS_IF" || true
+    fi
+
+    [[ -n "$PHYS_IF" ]] && wait_for_ip "$PHYS_IF"
 }
 
-if [[ "${1:-}" == "--remove" ]]; then restore_ethernet; echo "Bridge removed. $PHYS_IF restored."; exit 0; fi
+# --- Toggle: if the bridge profile exists, tear it down and exit. ---
+if nmcli con show "$BRIDGE" &>/dev/null; then
+    bridge_down
+    echo "Bridge removed. Normal networking restored."
+    exit 0
+fi
+
+# --- Otherwise: bring the bridge up. ---
 
 # Ensure NetworkManager is running before any nmcli calls.
 if ! systemctl is-active --quiet NetworkManager; then
     echo "Starting NetworkManager..."
-    systemctl enable --now NetworkManager
+    systemctl start NetworkManager
 fi
 
-select_interface "Enter physical interface (e.g. enp4s0): "
-warn_if_wifi
+select_interface
 
-# On error, restore_ethernet acts as a rollback since PHYS_IF is already set.
-trap 'echo "Setup failed. Attempting to restore network on $PHYS_IF..."; restore_ethernet' ERR
+# Remember which connection is currently active on the interface so it can be
+# restored when the bridge is toggled off.
+ACTIVE_CON=$(nmcli -g GENERAL.CONNECTION device show "$PHYS_IF" 2>/dev/null || true)
+if [[ -n "$ACTIVE_CON" ]]; then
+    printf '%s\n' "$ACTIVE_CON" > "$STATE_FILE"
+fi
 
-# Remove all existing connections on this interface before creating the bridge to avoid IP conflicts.
-# Loop handles multiple profiles (VLAN, VPN, etc.) — not just the first one found.
-while IFS= read -r OLD_CON; do
-    [[ -z "$OLD_CON" || "$OLD_CON" == "$BRIDGE" ]] && continue
-    echo "Removing old connection: $OLD_CON..."
-    nmcli con down "$OLD_CON" 2>/dev/null || true
-    nmcli con delete "$OLD_CON" 2>/dev/null || true
-done < <(nmcli -g NAME,DEVICE con show | awk -F: -v dev="$PHYS_IF" '$2 == dev {print $1}')
+# On error, bridge_down acts as a rollback since PHYS_IF is already set.
+trap 'echo "Setup failed. Restoring network on $PHYS_IF..."; bridge_down' ERR
 
-# Create bridge and slave connections; silently no-op if they already exist from a prior run.
-nmcli con add type bridge ifname "$BRIDGE" con-name "$BRIDGE" stp no 2>/dev/null || true
-nmcli con add type bridge-slave ifname "$PHYS_IF" master "$BRIDGE" con-name "bridge-slave-$PHYS_IF" 2>/dev/null || true
-
-# Configure DHCP and autoconnect on the bridge.
-nmcli con mod "$BRIDGE" \
+# autoconnect no: the bridge only exists while toggled on and never takes over
+# the interface at boot. The original profile keeps its own autoconnect and
+# wins again after a reboot or after toggling off.
+nmcli con add type bridge ifname "$BRIDGE" con-name "$BRIDGE" \
+    stp no \
     ipv4.method auto ipv6.method auto \
-    connection.autoconnect yes \
+    connection.autoconnect no \
     connection.autoconnect-slaves yes
+nmcli con add type bridge-slave ifname "$PHYS_IF" master "$BRIDGE" \
+    con-name "bridge-slave-$PHYS_IF" \
+    connection.autoconnect no
 
 # Bring up slave first — this creates the br0 kernel device.
 # Then bring up the bridge master to configure IP on the now-existing device.
@@ -153,9 +165,7 @@ nmcli con up "$BRIDGE"
 wait_for_ip "$BRIDGE"
 trap - ERR
 
-echo "Bridge $BRIDGE is active and will persist after reboot."
-echo "Verification:"
-nmcli device status
+echo
+echo "Bridge $BRIDGE is active. Configure the VM in virt-manager with 'Bridge br0'."
+echo "Run this script again to remove the bridge and restore normal networking."
 ip addr show "$BRIDGE"
-
-echo "Bridge ready! Configure VM in virt-manager with 'Bridge br0'."
