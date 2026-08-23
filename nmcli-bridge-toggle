@@ -6,7 +6,7 @@
 set -euo pipefail
 
 BRIDGE=br0
-STATE="${XDG_RUNTIME_DIR:-/tmp}/nmcli-bridge-setup.state"
+STATE="${XDG_RUNTIME_DIR:-/tmp}/nmcli-bridge-toggle.state"
 
 [[ "${1:-}" =~ ^(-h|--help)$ ]] && { echo "Usage: $0 — run once to create bridge $BRIDGE, run again to remove it."; exit 0; }
 

@@ -1,4 +1,4 @@
-# nmcli-bridge-setup
+# nmcli-bridge-toggle
 
 A small Bash helper script that toggles a NetworkManager bridge (`br0`) on and off using `nmcli` — run it once before starting a VM to bring the bridge up, and again when you're done to restore normal networking.
 
@@ -34,13 +34,13 @@ Root is normally **not** required: `nmcli` permissions go through polkit, and on
 1. Make the script executable (if needed):
 
 ```bash
-chmod +x nmcli-bridge-setup.sh
+chmod +x nmcli-bridge-toggle
 ```
 
 2. Before starting your VM, run the script to bring the bridge up:
 
 ```bash
-./nmcli-bridge-setup.sh
+./nmcli-bridge-toggle
 ```
 
 3. Follow the prompt and select the physical Ethernet interface (for example `enp4s0`).
@@ -50,10 +50,10 @@ chmod +x nmcli-bridge-setup.sh
 5. When you're done with the VM, run the same command again to remove the bridge and restore your previous connection:
 
 ```bash
-./nmcli-bridge-setup.sh
+./nmcli-bridge-toggle
 ```
 
-> **Note:** The previously active connection name is stored in `$XDG_RUNTIME_DIR/nmcli-bridge-setup.state` (falling back to `/tmp`). Since that directory is cleared on reboot and the bridge never autoconnects, a reboot with the bridge still up simply brings the system back on the normal connection — though the leftover `br0` profiles will be deleted the next time the script runs.
+> **Note:** The previously active connection name is stored in `$XDG_RUNTIME_DIR/nmcli-bridge-toggle.state` (falling back to `/tmp`). Since that directory is cleared on reboot and the bridge never autoconnects, a reboot with the bridge still up simply brings the system back on the normal connection — though the leftover `br0` profiles will be deleted the next time the script runs.
 
 ## Disclaimer
 
