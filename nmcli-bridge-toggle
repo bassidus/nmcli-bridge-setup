@@ -10,6 +10,12 @@ STATE="${XDG_RUNTIME_DIR:-/tmp}/nmcli-bridge-toggle.state"
 
 [[ "${1:-}" =~ ^(-h|--help)$ ]] && { echo "Usage: $0 — run once to create bridge $BRIDGE, run again to remove it."; exit 0; }
 
+confirm() {
+    local answer
+    read -rp "$1 [Y/n]: " answer
+    [[ ! ${answer:-Y} =~ ^[Nn] ]] || { echo "Aborted."; exit 1; }
+}
+
 wait_for_ip() {
     echo -n "Waiting for IP"
     for _ in {1..15}; do
@@ -38,6 +44,9 @@ bridge_down() {
 }
 
 if nmcli con show "$BRIDGE" &>/dev/null; then
+    SLAVE_IF=$(nmcli -g NAME con show | sed -n 's/^bridge-slave-//p' | head -n1)
+    echo "Current state: bridge $BRIDGE is up${SLAVE_IF:+ (enslaving $SLAVE_IF)}."
+    confirm "Tear it down and restore normal networking?"
     bridge_down
     echo "Bridge removed. Normal networking restored."
     exit 0
@@ -45,13 +54,15 @@ fi
 
 systemctl is-active --quiet NetworkManager || { echo "NetworkManager is not running: sudo systemctl start NetworkManager"; exit 1; }
 
+echo "Current state: bridge $BRIDGE is down (normal networking)."
+confirm "Bring the bridge up?"
+
 # Pick a physical Ethernet interface (Wi-Fi cannot be bridged).
 mapfile -t IFACES < <(nmcli -g DEVICE,TYPE device status | awk -F: '$2 == "ethernet" {print $1}')
 [[ ${#IFACES[@]} -gt 0 ]] || { echo "No Ethernet interfaces found."; exit 1; }
 if [[ ${#IFACES[@]} -eq 1 ]]; then
     PHYS_IF=${IFACES[0]}
-    read -rp "Interface: $PHYS_IF — confirm? [Y/n]: " C
-    [[ ! ${C:-Y} =~ ^[Nn] ]] || { echo "Aborted."; exit 1; }
+    confirm "Interface: $PHYS_IF — use it?"
 else
     printf '  %s\n' "${IFACES[@]}"
     read -rp "Enter physical interface: " PHYS_IF
