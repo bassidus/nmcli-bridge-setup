@@ -25,15 +25,23 @@ wait_for_ip() {
     echo; echo "Warning: no IPv4 on $1 yet"
 }
 
-# Toggle off / rollback: delete the bridge profiles (deleting an active
-# profile also deactivates it) and reactivate the previous connection.
-bridge_down() {
-    local iface old_con=""
-    iface=$(nmcli -g NAME con show | sed -n 's/^bridge-slave-//p' | head -n1)
-    echo "Bringing down bridge $BRIDGE..."
+slave_iface() { nmcli -g NAME con show | sed -n 's/^bridge-slave-//p' | head -n1; }
+
+# Delete the bridge profiles; deleting an active profile also deactivates it.
+delete_profiles() {
+    local iface=$1
     nmcli con delete "$BRIDGE" 2>/dev/null || true
     [[ -z "$iface" ]] || nmcli con delete "bridge-slave-$iface" 2>/dev/null || true
-    [[ ! -f "$STATE" ]] || { old_con=$(<"$STATE"); rm -f "$STATE"; }
+    rm -f "$STATE"
+}
+
+# Toggle off / rollback: drop the profiles and reactivate the previous connection.
+bridge_down() {
+    local iface old_con=""
+    iface=$(slave_iface)
+    echo "Bringing down bridge $BRIDGE..."
+    [[ ! -f "$STATE" ]] || old_con=$(<"$STATE")
+    delete_profiles "$iface"
     if [[ -n "$old_con" ]] && nmcli con show "$old_con" &>/dev/null; then
         echo "Reactivating '$old_con'..."
         nmcli con up "$old_con"
@@ -43,8 +51,12 @@ bridge_down() {
     [[ -z "$iface" ]] || wait_for_ip "$iface"
 }
 
-if nmcli con show "$BRIDGE" &>/dev/null; then
-    SLAVE_IF=$(nmcli -g NAME con show | sed -n 's/^bridge-slave-//p' | head -n1)
+systemctl is-active --quiet NetworkManager || { echo "NetworkManager is not running: sudo systemctl start NetworkManager"; exit 1; }
+
+# Only an *active* bridge means "toggle off". A profile that merely exists is
+# left over from a session that ended with the bridge up.
+if nmcli -g NAME con show --active | grep -qx "$BRIDGE"; then
+    SLAVE_IF=$(slave_iface)
     echo "Current state: bridge $BRIDGE is up${SLAVE_IF:+ (enslaving $SLAVE_IF)}."
     confirm "Tear it down and restore normal networking?"
     bridge_down
@@ -52,7 +64,13 @@ if nmcli con show "$BRIDGE" &>/dev/null; then
     exit 0
 fi
 
-systemctl is-active --quiet NetworkManager || { echo "NetworkManager is not running: sudo systemctl start NetworkManager"; exit 1; }
+# A reboot with the bridge still up drops the kernel device and brings the
+# normal connection back, but the profiles stay on disk. Clear them as part of
+# this run so it still ends with the bridge up, rather than costing a run.
+if nmcli con show "$BRIDGE" &>/dev/null || [[ -n "$(slave_iface)" ]]; then
+    echo "Clearing leftover $BRIDGE profiles from a previous session..."
+    delete_profiles "$(slave_iface)"
+fi
 
 echo "Current state: bridge $BRIDGE is down (normal networking)."
 confirm "Bring the bridge up?"
